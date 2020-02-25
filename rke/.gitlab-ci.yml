@@ -1,0 +1,110 @@
+stages:
+  - rke-up
+  - setup-service
+  - haproxy
+
+.rke-up: &rke-up
+  stage: rke-up
+  image: dangvv1995/rke:v1.0.0
+  variables:
+    CLUSTER_NAME: rke
+  before_script:
+    - echo $GOOGLE_APPLICATION_CREDENTIALS | base64 -d > .google-service-account.json
+    - echo restore states ${CLUSTER_NAME}
+    - gcloud auth activate-service-account --key-file .google-service-account.json
+    - gsutil rsync gs://rke-states/${CLUSTER_NAME}/ ./${CLUSTER_NAME}/
+    - echo ${SSH_PRIVATE_KEY} | base64 -d > $CLUSTER_NAME/kubernetes.pem
+    - ls ${CLUSTER_NAME}
+  script:
+    - cd ${CLUSTER_NAME} && rke up
+  after_script:
+    - echo backup states ${CLUSTER_NAME}
+    - ls ${CLUSTER_NAME}
+    - gsutil cp ${CLUSTER_NAME}/cluster.rkestate gs://rke-states/${CLUSTER_NAME}/cluster.rkestate
+    - gsutil cp ${CLUSTER_NAME}/kube_config_cluster.yml gs://rke-states/${CLUSTER_NAME}/kube_config_cluster.yml
+    - echo ${SSH_PRIVATE_KEY} | base64 -d > $CLUSTER_NAME/kubernetes.pem
+  only:
+    refs:
+      - master
+  tags:
+    - ci-infras
+  retry: 2
+
+
+rke-lbs-kong:
+  <<: *rke-up
+  variables:
+    CLUSTER_NAME: rke-lbs-kong
+  only:
+    refs:
+      - master
+    changes:
+      - rke-lbs-kong/*
+
+rke-db:
+  <<: *rke-up
+  variables:
+    CLUSTER_NAME: rke-db
+  only:
+    refs:
+      - master
+    changes:
+      - rke-db/*
+
+rke-app:
+  <<: *rke-up
+  variables:
+    CLUSTER_NAME: rke-app
+  only:
+    refs:
+      - master
+    changes:
+      - rke-app/*
+
+setup-service:
+  stage: setup-service
+  # image: dangvv1995/python3.7-gcloud-sdk:1.0
+  image: python:3.7
+  variables:
+    STEP: setup
+  before_script:
+    - echo ${SSH_PRIVATE_KEY} | base64 -d > $STEP/private_key
+    - echo ${SSH_PUBLIC_KEY} > $STEP/public_key
+    # - echo $GOOGLE_APPLICATION_CREDENTIALS | base64 -d > .google-service-account.json
+    # - echo restore states ${STEP}
+    # - gcloud auth activate-service-account --key-file .google-service-account.json
+    # - gsutil rsync gs://rke-states/${STEP}/ ./${STEP}/
+    - ls ${STEP}
+  script:
+    - cd $STEP
+    - pip install -r requirements.txt
+    - python setup-service.py
+  # after_script:
+  #   - echo backup states ${STEP}
+  #   - ls ${STEP}
+  #   - gsutil cp ${STEP}/state.txt gs://rke-states/${STEP}/state_old.txt
+  only:
+    refs:
+      - master
+    changes:
+      - setup/*
+  tags:
+    - ci-infras
+
+
+config-haproxy:
+  stage: haproxy
+  image: python:3.7
+  before_script:
+    - echo ${SSH_PRIVATE_KEY} | base64 -d > kube-apiserver-haproxy/haproxy
+  script:
+    - cd kube-apiserver-haproxy
+    - pip install -r requirements.txt
+    - python config-haproxy.py
+  only:
+    refs:
+      - master
+    changes:
+      - kube-apiserver-haproxy/*
+  tags:
+    - ci-infras
